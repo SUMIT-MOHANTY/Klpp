@@ -1,222 +1,137 @@
-"""
-Insurance Claim Model
-
-This module contains the Claim model representing insurance claims
-submitted against policies in the financial insurance system.
-"""
-
+from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, ForeignKey, Text, Enum
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+from pydantic import BaseModel, Field, validator
+from typing import Optional, List
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Numeric, ForeignKey, Enum, Text, JSON, Index
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import validates
-import uuid
-from backend.app import db
+import enum
 import logging
 
 logger = logging.getLogger(__name__)
 
-class ClaimStatus:
-    """Enumeration of claim status values."""
-    PENDING = "pending"
+class ClaimStatus(str, enum.Enum):
+    """Enum for claim statuses"""
+    SUBMITTED = "submitted"
+    UNDER_REVIEW = "under_review"
     APPROVED = "approved"
     REJECTED = "rejected"
-    PROCESSING = "processing"
+    SETTLED = "settled"
+
+class ClaimType(str, enum.Enum):
+    """Enum for claim types"""
+    ACCIDENT = "accident"
+    ILLNESS = "illness"
+    THEFT = "theft"
+    DAMAGE = "damage"
+    DEATH = "death"
+
+class Claim(Base):
+    """Insurance Claim entity with comprehensive validation and error handling"""
+
+    __tablename__ = "claims"
+
+    # Primary keys
+    id = Column(String(36), primary_key=True, default=func.uuid())
+
+    # Foreign keys
+    policy_id = Column(String(36), ForeignKey('policies.id'), nullable=False, index=True)
+
+    # Claim information
+    claim_number = Column(String(20), unique=True, nullable=False, index=True)
+    claim_type = Column(Enum(ClaimType), nullable=False)
+    status = Column(Enum(ClaimStatus), default=ClaimStatus.SUBMITTED)
+
+    # Claim details
+    description = Column(Text, nullable=False)
+    amount_claimed = Column(Float, nullable=False)
+    amount_approved = Column(Float, default=0.0)
+
+    # Dates
+    incident_date = Column(DateTime, nullable=False)
+    submitted_date = Column(DateTime, default=func.now())
+    resolved_date = Column(DateTime, nullable=True)
+
+    # Additional info
+    incident_location = Column(String(255), nullable=True)
+    damage_items = Column(Text, nullable=True)  # JSON list of damaged items
+    witness_info = Column(Text, nullable=True)  # JSON object
+
+    # Document management
+    documents_attached = Column(String(5), default='no')  # 'yes', 'no'
+    supporting_docs = Column(Text, nullable=True)  # JSON list of document URLs
+
+    # Metadata
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    is_active = Column(Boolean, default=True)
+
+    # Relationships
+    policy = relationship("Policy", back_populates="claims")
+
+    # Validation methods
+    def validate_claim_amount(self):
+        """Validate claim amount is positive and within policy limits"""
+        if self.amount_claimed <= 0:
+            raise ValueError("Claim amount must be positive")
+        if not self.policy:
+            return
+
+        # TODO: Add actual policy limit validation
+        # if self.amount_claimed > self.policy.coverage_limit:
+        #     raise ValueError("Claim amount exceeds policy coverage limit")
+
+    def validate_dates(self):
+        """Validate claim submission and incident dates"""
+        if self.incident_date > datetime.now():
+            raise ValueError("Incident date cannot be in the future")
+        if self.submitted_date and self.submitted_date < self.incident_date:
+            raise ValueError("Submission date must be after incident date")
 
     @classmethod
-    def choices(cls):
-        """Return list of valid claim statuses."""
-        return [cls.PENDING, cls.APPROVED, cls.REJECTED, cls.PROCESSING]
-
-class Claim(db.Model):
-    """
-    Claim model representing an insurance claim.
-
-    Attributes:
-        id: Unique identifier for the claim (UUID)
-        policy_id: Foreign key referencing the policy this claim is against
-        amount_requested: Amount claimed by the user (decimal with 2 decimal places)
-        amount_approved: Amount approved by the insurer (nullable)
-        status: Current claim status (pending, approved, rejected, processing)
-        description: Description of the claim (max 500 characters)
-        documents: JSON object containing document metadata (nullable)
-        created_at: Timestamp when claim was created
-        updated_at: Timestamp when claim was last modified
-
-    Table name: claims
-    """
-
-    __tablename__ = 'claims'
-
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-        comment="Unique identifier for the claim"
-    )
-
-    policy_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey('policies.id', ondelete='CASCADE'),
-        nullable=False,
-        index=True,
-        comment="Foreign key to the policy this claim is against"
-    )
-
-    amount_requested = Column(
-        Numeric(10, 2),
-        nullable=False,
-        comment="Amount requested by the claimant"
-    )
-
-    amount_approved = Column(
-        Numeric(10, 2),
-        nullable=True,
-        comment="Amount approved by the insurer"
-    )
-
-    status = Column(
-        String(20),
-        Enum(*ClaimStatus.choices(), name='claim_status_enum'),
-        nullable=False,
-        default=ClaimStatus.PENDING,
-        index=True,
-        comment="Current processing status of the claim"
-    )
-
-    description = Column(
-        Text,
-        nullable=False,
-        comment="Description of the claim (max 500 chars)"
-    )
-
-    documents = Column(
-        JSON,
-        nullable=True,
-        comment="JSON metadata for supporting documents"
-    )
-
-    created_at = Column(
-        DateTime(timezone=True),
-        default=datetime.utcnow,
-        nullable=False,
-        comment="Timestamp when claim was created"
-    )
-
-    updated_at = Column(
-        DateTime(timezone=True),
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
-        nullable=False,
-        comment="Timestamp when claim was last modified"
-    )
-
-    # Composite indexes for performance
-    __table_args__ = (
-        Index('idx_claim_policy_status', 'policy_id', 'status'),
-        Index('idx_claim_status_created', 'status', 'created_at'),
-    )
-
-    @validates('amount_requested', 'amount_approved')
-    def validate_amounts(self, key, value):
-        """Validate monetary amounts are non-negative."""
-        if value is None:
-            return value
-
-        try:
-            amount_value = float(value)
-            if amount_value < 0:
-                raise ValueError(f"{key} must be non-negative")
-
-            # Additional validation for approved amount
-            if key == 'amount_approved' and amount_value is not None:
-                if hasattr(self, 'amount_requested') and self.amount_requested is not None:
-                    if amount_value > float(self.amount_requested):
-                        raise ValueError(
-                            f"Approved amount ({amount_value}) cannot exceed requested amount ({self.amount_requested})"
-                        )
-
-            return value
-        except (ValueError, TypeError) as e:
-            logger.error(f"Invalid amount value '{value}' for field {key}: {str(e)}")
-            raise ValueError(
-                f"Invalid amount for {key}: {str(value)}. "
-                f"{key} must be a non-negative number. Error: {str(e)}"
-            )
-
-    @validates('description')
-    def validate_description(self, key, value):
-        """Validate description length."""
-        if value and len(value) > 500:
-            raise ValueError("Description must be 500 characters or less")
-        return value
-
-    @validates('policy_id')
-    def validate_policy_id(self, key, value):
-        """Ensure policy_id is provided and valid."""
-        if not value:
-            raise ValueError("Policy ID is required")
-        return value
+    def generate_claim_number(cls) -> str:
+        """Generate a unique claim number"""
+        import uuid
+        return f"CLM-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
 
     def __repr__(self):
-        """Return string representation of the Claim."""
-        return f"Claim({self.id}, {self.status})"
+        return f"<Claim(claim_number={self.claim_number}, amount={self.amount_claimed})>"
 
-    def approve(self, approved_amount, commit=True):
-        """
-        Approve the claim with specified amount.
+class ClaimCreate(BaseModel):
+    """Claim creation schema with comprehensive validation"""
+    claim_type: ClaimType
+    description: str = Field(..., min_length=10, max_length=1000)
+    amount_claimed: float = Field(..., gt=0, lt=1000000)
+    incident_date: datetime
+    incident_location: Optional[str] = Field(None, max_length=255)
+    damage_items: Optional[List[str]] = Field(default_factory=list, max_length=100)
+    witness_info: Optional[dict] = Field(default_factory=dict)
 
-        Args:
-            approved_amount: Amount to be approved
-            commit: Whether to commit the changes immediately
-        """
-        from backend.app.models.policy import Policy
+    @validator('incident_date')
+    def validate_incident_date(cls, v):
+        """Ensure incident date is not in the future"""
+        if v > datetime.now():
+            raise ValueError('Incident date cannot be in the future')
+        return v
 
-        try:
-            self.amount_approved = approved_amount
-            self.status = ClaimStatus.APPROVED
-            self.updated_at = datetime.utcnow()
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
 
-            if commit:
-                db.session.commit()
-            logger.info(f"Claim {self.id} approved for amount ${approved_amount}")
-        except Exception as e:
-            logger.error(f"Error approving claim {self.id}: {str(e)}")
-            raise
+class ClaimUpdate(BaseModel):
+    """Claim update schema"""
+    status: Optional[ClaimStatus] = None
+    amount_approved: Optional[float] = Field(None, ge=0)
+    description: Optional[str] = Field(None, min_length=10, max_length=1000)
 
-    def reject(self, reason=None, commit=True):
-        """
-        Reject the claim.
+    @validator('amount_approved')
+    def validate_approved_amount(cls, v):
+        """Validate approved amount is positive"""
+        if v is not None and v < 0:
+            raise ValueError('Approved amount cannot be negative')
+        return v
 
-        Args:
-            reason: Optional reason for rejection
-            commit: Whether to commit the changes immediately
-        """
-        try:
-            self.status = ClaimStatus.REJECTED
-            self.amount_approved = 0.00
-            self.updated_at = datetime.utcnow()
-
-            if reason:
-                logger.warning(f"Claim {self.id} rejected: {reason}")
-            else:
-                logger.info(f"Claim {self.id} rejected")
-
-            if commit:
-                db.session.commit()
-        except Exception as e:
-            logger.error(f"Error rejecting claim {self.id}: {str(e)}")
-            raise
-
-    def to_dict(self):
-        """Convert claim to dictionary representation."""
-        return {
-            'id': str(self.id),
-            'policy_id': str(self.policy_id),
-            'amount_requested': float(self.amount_requested),
-            'amount_approved': float(self.amount_approved) if self.amount_approved else None,
-            'status': self.status,
-            'description': self.description,
-            'documents': self.documents,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
         }
