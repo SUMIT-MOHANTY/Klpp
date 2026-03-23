@@ -1,122 +1,110 @@
 import React, { Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { useAuthStore } from './store/authStore';
+import Login from './pages/auth/Login';
+import Signup from './pages/auth/Signup';
+import ForgotPassword from './pages/auth/ForgotPassword';
+import ResetPassword from './pages/auth/ResetPassword';
+import AdminDashboard from './pages/dashboards/AdminDashboard';
+import UnderwriterDashboard from './pages/dashboards/UnderwriterDashboard';
+import AgentDashboard from './pages/dashboards/AgentDashboard';
+import CustomerDashboard from './pages/dashboards/CustomerDashboard';
+import Layout from './components/Layout/Layout';
+import ProtectedRoute from './components/routing/ProtectedRoute';
+import { Role } from './types/auth';
 
-// Project-wide type constants
-export const ROLE = {
-  BANK: 'BANK',
-  INSURER: 'INSURER',
-  USER: 'USER'
-} as const;
+function App() {
+  const { user, loading } = useAuthStore();
 
-// Lazy load dashboard components
-const BankDashboard = React.lazy(() => import('./components/BankDashboard'));
-const InsurerDashboard = React.lazy(() => import('./components/InsurerDashboard'));
-const UserDashboard = React.lazy(() => import('./components/UserDashboard'));
-const Login = React.lazy(() => import('./components/Login'));
-const Register = React.lazy(() => import('./components/Register'));
-
-// AuthGuard component to handle role-based routing
-const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const location = useLocation();
-
-  const getRoleFromPath = (pathname: string): string | null => {
-    if (pathname.startsWith('/dashboard/bank')) return ROLE.BANK;
-    if (pathname.startsWith('/dashboard/insurer')) return ROLE.INSURER;
-    if (pathname.startsWith('/dashboard/user')) return ROLE.USER;
-    return null;
-  };
-
-  const isAuthenticated = () => {
-    // Check for auth token or session
-    return localStorage.getItem('authToken') !== null;
-  };
-
-  const getUserRole = () => {
-    // Get role from localStorage or auth state
-    return localStorage.getItem('userRole');
-  };
-
-  const isAuthorized = () => {
-    const requiredRole = getRoleFromPath(location.pathname);
-    const userRole = getUserRole();
-    const authenticated = isAuthenticated();
-
-    return authenticated && requiredRole === userRole;
-  };
-
-  if (!isAuthenticated()) {
-    return <Navigate to="/" replace />;
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-gray-900"></div>
+      </div>
+    );
   }
 
-  if (!isAuthorized()) {
-    // Redirect to appropriate dashboard based on role
-    const userRole = getUserRole();
-    switch (userRole) {
-      case ROLE.BANK:
-        return <Navigate to="/dashboard/bank" replace />;
-      case ROLE.INSURER:
-        return <Navigate to="/dashboard/insurer" replace />;
-      case ROLE.USER:
-        // For users, extract ID from localStorage or default to empty
-        const userId = localStorage.getItem('userId') || '';
-        return <Navigate to={`/dashboard/user/${userId}`} replace />;
+  const getDefaultRoute = () => {
+    if (!user) return '/login';
+    switch (user.role) {
+      case Role.ADMIN:
+        return '/admin/dashboard';
+      case Role.UNDERWRITER:
+        return '/underwriter/dashboard';
+      case Role.AGENT:
+        return '/agent/dashboard';
+      case Role.CUSTOMER:
+        return '/customer/dashboard';
       default:
-        return <Navigate to="/" replace />;
+        return '/login';
     }
-  }
+  };
 
-  return <>{children}</>;
-};
-
-// Loading component for suspense
-const Loading: React.FC = () => (
-  <div className="flex items-center justify-center h-screen">
-    <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-gray-900"></div>
-  </div>
-);
-
-// Main App Component
-const App: React.FC = () => {
   return (
-    <BrowserRouter>
-      <Suspense fallback={<Loading />}>
+    <Router>
+      <Suspense fallback={
+        <div className="flex items-center justify-center h-screen">
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-gray-900"></div>
+        </div>
+      }>
         <Routes>
           {/* Public routes */}
-          <Route path="/" element={<Login />} />
-          <Route path="/register" element={<Register />} />
+          <Route path="/login" element={user ? <Navigate to={getDefaultRoute()} replace /> : <Login />} />
+          <Route path="/signup" element={user ? <Navigate to={getDefaultRoute()} replace /> : <Signup />} />
+          <Route path="/register" element={user ? <Navigate to={getDefaultRoute()} replace /> : <Signup />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password/:token" element={<ResetPassword />} />
 
-          {/* Protected dashboard routes */}
-          <Route
-            path="/dashboard/bank"
-            element={
-              <AuthGuard>
-                <BankDashboard />
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/dashboard/insurer"
-            element={
-              <AuthGuard>
-                <InsurerDashboard />
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/dashboard/user/:user_id"
-            element={
-              <AuthGuard>
-                <UserDashboard />
-              </AuthGuard>
-            }
-          />
-
-          {/* Catch-all redirect to login */}
-          <Route path="*" element={<Navigate to="/" replace />} />
+          {/* Protected routes */}
+          <Route element={<Layout />}>
+            {/* Admin routes */}
+            <Route path="/admin/*" element={
+              <ProtectedRoute allowedRoles={[Role.ADMIN]}>
+                <Routes>
+                  <Route index element={<Navigate to="/admin/dashboard" replace />} />
+                  <Route path="dashboard" element={<AdminDashboard />} />
+                </Routes>
+              </ProtectedRoute>
+            } />
+            {/* Underwriter routes */}
+            <Route path="/underwriter/*" element={
+              <ProtectedRoute allowedRoles={[Role.UNDERWRITER]}>
+                <Routes>
+                  <Route index element={<Navigate to="/underwriter/dashboard" replace />} />
+                  <Route path="dashboard" element={<UnderwriterDashboard />} />
+                </Routes>
+              </ProtectedRoute>
+            } />
+            {/* Agent routes */}
+            <Route path="/agent/*" element={
+              <ProtectedRoute allowedRoles={[Role.AGENT]}>
+                <Routes>
+                  <Route index element={<Navigate to="/agent/dashboard" replace />} />
+                  <Route path="dashboard" element={<AgentDashboard />} />
+                </Routes>
+              </ProtectedRoute>
+            } />
+            {/* Customer routes */}
+            <Route path="/customer/*" element={
+              <ProtectedRoute allowedRoles={[Role.CUSTOMER]}>
+                <Routes>
+                  <Route index element={<Navigate to="/customer/dashboard" replace />} />
+                  <Route path="dashboard" element={<CustomerDashboard />} />
+                </Routes>
+              </ProtectedRoute>
+            } />
+            {/* Legacy role-based routes for compatibility */}
+            <Route path="/dashboard/bank" element={<Navigate to="/admin/dashboard" replace />} />
+            <Route path="/dashboard/insurer" element={<Navigate to="/underwriter/dashboard" replace />} />
+            <Route path="/dashboard/user/:user_id" element={<Navigate to="/customer/dashboard" replace />} />
+            {/* Root redirect */}
+            <Route path="/" element={<Navigate to={getDefaultRoute()} replace />} />
+            <Route path="*" element={<Navigate to="/login" replace />} />
+          </Route>
         </Routes>
       </Suspense>
-    </BrowserRouter>
+    </Router>
   );
-};
+}
 
 export default App;
