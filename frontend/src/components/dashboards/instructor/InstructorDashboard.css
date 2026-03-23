@@ -1,0 +1,16 @@
+.instructor-dashboard .ant-statistic-title {
+  font-size: 14px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.instructor-dashboard .ant-card {
+  margin-bottom: 16px;
+}
+
+.instructor-dashboard .ant-statistic-content-wrapper {
+  text-align: center;
+}
+
+.instructor-dashboard .ant-btn-link {
+  padding: 0;
+}
