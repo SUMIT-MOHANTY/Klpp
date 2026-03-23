@@ -18,3 +18,7 @@ def create_app():
         app.register_blueprint(health.bp)
 
     return app
+
+# Import and register ledger blueprint
+from app.routes.ledger import ledger_bp
+app.register_blueprint(ledger_bp)
