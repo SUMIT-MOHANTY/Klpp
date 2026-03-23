@@ -1,39 +1,52 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Enum
+"""
+User model for the fin-insurance-sandbox application.
+
+This module defines the database schema for users including role-based access
+control for the insurance platform.
+"""
+
+from datetime import datetime
+from sqlalchemy import Column, Integer, String, DateTime, Enum
 from sqlalchemy.sql import func
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import validates
-import re
+from app import db
 
-# Create enum for user roles
-from enum import Enum as PyEnum
+class User(db.Model):
+    """User model representing account holders in the insurance platform."""
 
-class UserRole(PyEnum):
-    USER = "user"
-    INSURANCE_AGENT = "insurance_agent"
-    BANK_AGENT = "bank_agent"
-    ADMIN = "admin"
+    __tablename__ = 'user'
 
-Base = declarative_base()
+    # Primary key
+    id = Column(Integer, primary_key=True, autoincrement=True)
 
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(Integer, primary_key=True, index=True)
+    # User credentials
+    username = Column(String(50), unique=True, nullable=False)
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
-    role = Column(Enum(UserRole), nullable=False, default=UserRole.USER)
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    @validates('email')
-    def validate_email(self, key, address):
-        """Validate email format"""
-        if not address:
-            raise ValueError("Email is required")
-        if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', address):
-            raise ValueError("Invalid email format")
-        return address
+    # Role-based access control
+    role = Column(
+        Enum('admin', 'underwriter', 'agent', 'customer',
+             name='user_role'),
+        nullable=False
+    )
+
+    # Timestamps
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False
+    )
 
     def __repr__(self):
-        return f"<User(id={self.id}, email={self.email}, role={self.role.name})>"
+        """String representation of User instance."""
+        return f"<User(id={self.id}, username='{self.username}', email='{self.email}', role='{self.role}')>"
+
+    def to_dict(self):
+        """Convert User instance to dictionary for JSON serialization."""
+        return {
+            'id': self.id,
+            'username': self.username,
+            'email': self.email,
+            'role': self.role,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
