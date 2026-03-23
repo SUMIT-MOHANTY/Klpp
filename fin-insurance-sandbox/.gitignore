@@ -1,0 +1,5 @@
+# Global ignores
+.env
+.idea/
+.vscode/
+*.log
