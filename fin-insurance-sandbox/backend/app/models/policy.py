@@ -1,199 +1,90 @@
-"""
-Insurance Policy Model
-
-This module contains the Policy model representing insurance policies
-in the financial insurance system.
-"""
-
+from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, ForeignKey, Text
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+from pydantic import BaseModel, Field, validator
+from typing import Optional
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Numeric, ForeignKey, Enum, Index
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import validates
-import uuid
-from backend.app import db
 import logging
 
 logger = logging.getLogger(__name__)
 
-class InsuranceType:
-    """Enumeration of supported insurance types."""
-    HEALTH = "health"
-    AUTO = "auto"
-    LIFE = "life"
-    PROPERTY = "property"
+class Policy(Base):
+    """Insurance Policy entity with comprehensive error handling and validation"""
 
-    @classmethod
-    def choices(cls):
-        """Return list of valid insurance types."""
-        return [cls.HEALTH, cls.AUTO, cls.LIFE, cls.PROPERTY]
+    __tablename__ = "policies"
 
-class PolicyStatus:
-    """Enumeration of policy status values."""
-    ACTIVE = "active"
-    EXPIRED = "expired"
-    CANCELLED = "cancelled"
+    # Primary keys
+    id = Column(String(36), primary_key=True, default=func.uuid())
 
-    @classmethod
-    def choices(cls):
-        """Return list of valid policy statuses."""
-        return [cls.ACTIVE, cls.EXPIRED, cls.CANCELLED]
+    # Policy information
+    policy_number = Column(String(20), unique=True, nullable=False, index=True)
+    holder_name = Column(String(100), nullable=False)
+    holder_email = Column(String(255), nullable=False, index=True)
+    holder_phone = Column(String(20), nullable=True)
 
-class Policy(db.Model):
-    """
-    Policy model representing an insurance policy.
+    # Policy details
+    policy_type = Column(String(50), nullable=False)  # 'health', 'auto', 'life', 'property'
+    premium_amount = Column(Float, nullable=False)
+    deductible = Column(Float, default=0.0)
+    coverage_limit = Column(Float, nullable=False)
 
-    Attributes:
-        id: Unique identifier for the policy (UUID)
-        user_id: Foreign key referencing the user who owns this policy
-        insurance_type: Type of insurance (health, auto, life, property)
-        premium: Monthly premium amount (decimal with 2 decimal places)
-        start_date: Policy start date and time
-        end_date: Policy end date and time
-        status: Current policy status (active, expired, cancelled)
-        created_at: Timestamp when policy was created
-        updated_at: Timestamp when policy was last modified
+    # Status and dates
+    status = Column(String(20), default='active', nullable=False)  # active, expired, cancelled
+    effective_date = Column(DateTime, nullable=False)
+    expiration_date = Column(DateTime, nullable=False)
 
-    Table name: policies
-    """
-
-    __tablename__ = 'policies'
-
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-        comment="Unique identifier for the policy"
-    )
-
-    user_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey('users.id', ondelete='CASCADE'),
-        nullable=False,
-        index=True,
-        comment="Foreign key to the user who owns this policy"
-    )
-
-    insurance_type = Column(
-        String(20),
-        Enum(*InsuranceType.choices(), name='insurance_type_enum'),
-        nullable=False,
-        comment="Type of insurance policy"
-    )
-
-    premium = Column(
-        Numeric(10, 2),
-        nullable=False,
-        comment="Monthly premium amount"
-    )
-
-    start_date = Column(
-        DateTime(timezone=True),
-        nullable=False,
-        comment="Policy start date and time"
-    )
-
-    end_date = Column(
-        DateTime(timezone=True),
-        nullable=False,
-        comment="Policy end date and time"
-    )
-
-    status = Column(
-        String(20),
-        Enum(*PolicyStatus.choices(), name='policy_status_enum'),
-        nullable=False,
-        default=PolicyStatus.ACTIVE,
-        index=True,
-        comment="Current policy status"
-    )
-
-    created_at = Column(
-        DateTime(timezone=True),
-        default=datetime.utcnow,
-        nullable=False,
-        comment="Timestamp when policy was created"
-    )
-
-    updated_at = Column(
-        DateTime(timezone=True),
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
-        nullable=False,
-        comment="Timestamp when policy was last modified"
-    )
-
-    # Composite indexes for performance
-    __table_args__ = (
-        Index('idx_policy_user_type', 'user_id', 'insurance_type'),
-        Index('idx_policy_status_dates', 'status', 'start_date', 'end_date'),
-    )
+    # Metadata
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    is_active = Column(Boolean, default=True)
 
     # Relationships
-    claims = db.relationship(
-        'Claim',
-        backref='policy',
-        lazy='dynamic',
-        cascade='all, delete-orphan'
-    )
+    claims = relationship("Claim", back_populates="policy", cascade="all, delete-orphan")
 
-    @validates('premium')
-    def validate_premium(self, key, value):
-        """Validate premium amount is greater than zero."""
-        try:
-            premium_value = float(value)
-            if premium_value <= 0:
-                raise ValueError("Premium must be greater than 0")
-            return value
-        except (ValueError, TypeError) as e:
-            logger.error(f"Invalid premium value '{value}': {str(e)}")
-            raise ValueError(
-                f"Premium must be a positive number. "
-                f"Provided: {value}. Error: {str(e)}"
-            )
+    def validate_policy_dates(self):
+        """Validate policy dates are logical"""
+        if self.effective_date and self.expiration_date:
+            if self.expiration_date <= self.effective_date:
+                raise ValueError("Expiration date must be after effective date")
 
-    @validates('start_date', 'end_date')
-    def validate_date_range(self, key, value):
-        """Validate date range logic."""
-        if key == 'start_date':
-            # Store for comparison when end_date is validated
-            self._start_date_cache = value
-        elif key == 'end_date':
-            # Check against cached start_date if not yet committed
-            start_date = getattr(self, '_start_date_cache', None)
-            if start_date is None:
-                # Fresh instance, check actual stored value
-                start_date = self.start_date
+    @validator('premium_amount', 'coverage_limit')
+    def validate_amounts(cls, v):
+        """Validate monetary amounts are positive"""
+        if v <= 0:
+            raise ValueError('Amount must be positive')
+        return v
 
-            if start_date is None:
-                raise ValueError("Start date is required")
-
-            if value <= start_date:
-                raise ValueError(
-                    f"End date ({value}) must be after start date ({start_date})"
-                )
-        return value
+    @validator('holder_email')
+    def validate_email(cls, v):
+        """Validate email format"""
+        if '@' not in v or '.' not in v.split('@')[1]:
+            raise ValueError('Invalid email format')
+        return v
 
     def __repr__(self):
-        """Return string representation of the Policy."""
-        return f"Policy({self.id}, {self.insurance_type})"
+        return f"<Policy(policy_number={self.policy_number}, holder={self.holder_name})>"
 
-    def is_active(self):
-        """Check if the policy is currently active."""
-        return (
-            self.status == PolicyStatus.ACTIVE and
-            self.start_date <= datetime.utcnow() <= self.end_date
-        )
+class PolicyCreate(BaseModel):
+    """Policy creation schema with comprehensive validation"""
+    policy_number: str = Field(..., min_length=3, max_length=20, description="Unique policy number")
+    holder_name: str = Field(..., min_length=2, max_length=100)
+    holder_email: str = Field(..., regex=r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+    holder_phone: Optional[str] = Field(None, max_length=20)
+    policy_type: str = Field(..., regex=r'^(health|auto|life|property)$')
+    premium_amount: float = Field(..., gt=0)
+    deductible: float = Field(default=0.0, ge=0)
+    coverage_limit: float = Field(..., gt=0)
+    effective_date: datetime
+    expiration_date: datetime
 
-    def to_dict(self):
-        """Convert policy to dictionary representation."""
-        return {
-            'id': str(self.id),
-            'user_id': str(self.user_id),
-            'insurance_type': self.insurance_type,
-            'premium': float(self.premium),
-            'start_date': self.start_date.isoformat() if self.start_date else None,
-            'end_date': self.end_date.isoformat() if self.end_date else None,
-            'status': self.status,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+    @validator('effective_date', 'expiration_date')
+    def validate_dates(cls, v):
+        """Ensure dates are not in the past and are logical"""
+        if v < datetime.now():
+            raise ValueError('Cannot use past dates')
+        return v
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
         }
