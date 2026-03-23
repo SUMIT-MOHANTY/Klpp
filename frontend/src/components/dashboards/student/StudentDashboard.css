@@ -1,0 +1,15 @@
+.student-dashboard .ant-progress-circle {
+  margin: 0 auto;
+}
+
+.student-dashboard .ant-card-actions {
+  text-align: center;
+}
+
+.student-dashboard .ant-card-actions a {
+  color: #1890ff;
+}
+
+.student-dashboard .ant-typography {
+  margin: 0;
+}

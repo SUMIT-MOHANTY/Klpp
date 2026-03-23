@@ -1,0 +1,17 @@
+.admin-dashboard .ant-statistic-title {
+  font-size: 14px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.admin-dashboard .ant-statistic-content {
+  font-size: 32px;
+  color: rgba(0, 0, 0, 0.85);
+}
+
+.admin-dashboard .ant-card-meta-description {
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.admin-dashboard .ant-card-actions {
+  background: #fafafa;
+}
