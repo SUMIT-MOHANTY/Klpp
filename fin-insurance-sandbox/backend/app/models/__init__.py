@@ -1,6 +1,4 @@
-from sqlalchemy.ext.declarative import declarative_base
-
-Base = declarative_base()
-
+from .base import Base
+from .user import User
 from .policy import Policy
-from .transaction import Transaction
+from .claim import Claim
