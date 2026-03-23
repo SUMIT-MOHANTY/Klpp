@@ -1,181 +1,143 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
-from sqlalchemy.orm import Session
-from datetime import timedelta
-from typing import Optional
-import time
-from collections import defaultdict
+"""
+Authentication endpoints for user registration and login.
 
-from backend.app.models.user import User, UserRole
-from backend.app.schemas.auth import (
-    UserRegisterRequest,
-    UserLoginRequest,
-    UserResponse,
-    TokenResponse,
-    RefreshTokenRequest,
-)
-from backend.app.utils.auth import (
-    get_password_hash,
-    verify_password,
-    create_access_token,
-    create_refresh_token,
-    decode_token,
-)
+Provides RESTful endpoints for user account creation and authentication
+with role-based access control for the insurance platform.
+"""
 
-# Import from existing app structure
-from backend.app import app
+from flask import Blueprint, request, jsonify
+from sqlalchemy.exc import IntegrityError
+from werkzeug.security import generate_password_hash, check_password_hash
+from app import db
+from app.models.user import User
 
-# Rate limiting storage
-rate_limit_storage = defaultdict(lambda: {"count": 0, "window": 0})
-MAX_REQUESTS_PER_MINUTE = 5
+# Create Blueprint for authentication routes
+auth_bp = Blueprint('auth', __name__, url_prefix='/api/v1/auth')
 
-def rate_limit(request: Request):
-    """Rate limiting middleware - 5 requests per minute per IP"""
-    client_ip = request.client.host
-    current_time = int(time.time())
+def _validate_registration_data(data):
+    """
+    Validate registration request data.
 
-    # Reset counter if window has passed
-    if current_time - rate_limit_storage[client_ip]["window"] >= 60:
-        rate_limit_storage[client_ip] = {"count": 0, "window": current_time}
+    Args:
+        data: Dictionary containing registration form data
 
-    # Check if limit exceeded
-    if rate_limit_storage[client_ip]["count"] >= MAX_REQUESTS_PER_MINUTE:
-        raise HTTPException(
-            status_code=429,
-            detail="Too many requests. Please wait a minute before trying again."
-        )
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    required_fields = ['username', 'email', 'password', 'role']
 
-    # Increment counter
-    rate_limit_storage[client_ip]["count"] += 1
+    # Check required fields
+    for field in required_fields:
+        if not data.get(field):
+            return False, f"Missing required field: {field}"
 
-# Dependency to get database session
-def get_db():
-    """Get database session - connect to existing app structure"""
-    from backend.app import get_session
-    return get_session()
+    # Validate password length
+    if len(data.get('password', '')) < 8:
+        return False, "Password must be at least 8 characters"
 
-# Create router
-router = APIRouter(prefix="/api/v1")
+    # Validate role
+    valid_roles = ['admin', 'underwriter', 'agent', 'customer']
+    if data.get('role') not in valid_roles:
+        return False, f"Invalid role. Must be one of: {', '.join(valid_roles)}"
 
-@router.post("/users/register", response_model=UserResponse)
-async def register_user(
-    request: Request,
-    user_data: UserRegisterRequest,
-    db: Session = Depends(get_db)
-):
-    """Register a new user with email and password"""
-    # Apply rate limiting
-    rate_limit(request)
+    return True, None
 
-    # Check if user already exists
-    existing_user = db.query(User).filter(User.email == user_data.email).first()
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User with this email already exists"
-        )
+@auth_bp.route('/register', methods=['POST'])
+def register():
+    """
+    Register a new user account.
 
-    # Create new user
-    new_user = User(
-        email=user_data.email,
-        password_hash=get_password_hash(user_data.password),
-        role=UserRole.USER  # Default role as user
-    )
+    Request Body:
+        {
+            "username": "string",
+            "email": "string",
+            "password": "string",
+            "role": "admin|underwriter|agent|customer"
+        }
 
+    Returns:
+        201: {"token": "string", "user": {user_object}}
+    """
     try:
-        db.add(new_user)
-        db.commit()
-        db.refresh(new_user)
+        # Get JSON payload
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Request must be JSON'}), 400
+
+        # Validate input data
+        is_valid, error_msg = _validate_registration_data(data)
+        if not is_valid:
+            return jsonify({'error': error_msg}), 400
+
+        # Create new user
+        new_user = User(
+            username=data['username'],
+            email=data['email'].lower().strip(),
+            password_hash=generate_password_hash(data['password']),
+            role=data['role']
+        )
+
+        # Save to database
+        db.session.add(new_user)
+        db.session.commit()
+
+        # Return success response (stub token for now)
+        return jsonify({
+            'token': f"stub_token_{new_user.id}",
+            'user': new_user.to_dict()
+        }), 201
+
+    except IntegrityError as e:
+        # Handle duplicate email/username
+        db.session.rollback()
+        if 'email' in str(e.orig):
+            return jsonify({'error': 'Email already registered'}), 409
+        elif 'username' in str(e.orig):
+            return jsonify({'error': 'Username already taken'}), 409
+        else:
+            return jsonify({'error': 'Database integrity error'}), 409
     except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error creating user. Please try again."
-        )
+        # Handle any other database errors
+        db.session.rollback()
+        return jsonify({'error': 'Registration failed'}), 500
 
-    return UserResponse.from_orm(new_user)
+@auth_bp.route('/login', methods=['POST'])
+def login():
+    """
+    Authenticate user and return access token.
 
-@router.post("/auth/login", response_model=TokenResponse)
-async def login_user(
-    request: Request,
-    credentials: UserLoginRequest,
-    db: Session = Depends(get_db)
-):
-    """Authenticate user and return JWT tokens"""
-    # Apply rate limiting
-    rate_limit(request)
+    Request Body:
+        {
+            "email": "string",
+            "password": "string"
+        }
 
-    # Find user by email
-    user = db.query(User).filter(User.email == credentials.email).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
-        )
+    Returns:
+        200: {"token": "string", "user": {user_object}}
+    """
+    try:
+        # Get JSON payload
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Request must be JSON'}), 400
 
-    # Check if account is active
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Account is deactivated"
-        )
+        # Validate required fields
+        if not data.get('email') or not data.get('password'):
+            return jsonify({'error': 'Email and password are required'}), 400
 
-    # Verify password
-    if not verify_password(credentials.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
-        )
+        # Find user by email
+        email = data['email'].lower().strip()
+        user = User.query.filter_by(email=email).first()
 
-    # Create tokens
-    user_data = {"sub": str(user.id), "email": user.email, "role": user.role.value}
-    access_token = create_access_token(user_data)
-    refresh_token = create_refresh_token(user_data)
+        # Verify user exists and password matches
+        if not user or not check_password_hash(user.password_hash, data['password']):
+            return jsonify({'error': 'Invalid email or password'}), 401
 
-    return TokenResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        expires_in=3600
-    )
+        # Return success response (stub token for now)
+        return jsonify({
+            'token': f"stub_token_{user.id}",
+            'user': user.to_dict()
+        }), 200
 
-@router.post("/auth/refresh", response_model=TokenResponse)
-async def refresh_token(
-    request: Request,
-    refresh_data: RefreshTokenRequest,
-    db: Session = Depends(get_db)
-):
-    """Generate new access token using refresh token"""
-    # Apply rate limiting
-    rate_limit(request)
-
-    # Decode refresh token
-    payload = decode_token(refresh_data.refresh_token)
-    if not payload or payload.get("type") != "refresh":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid refresh token"
-        )
-
-    # Get user from token
-    user_id = payload.get("sub")
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if not user or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid refresh token"
-        )
-
-    # Generate new access token
-    user_data = {"sub": str(user.id), "email": user.email, "role": user.role.value}
-    new_access_token = create_access_token(user_data)
-
-    # Generate new refresh token
-    new_refresh_token = create_refresh_token(user_data)
-
-    return TokenResponse(
-        access_token=new_access_token,
-        refresh_token=new_refresh_token,
-        expires_in=3600
-    )
-
-# Register router with app
-app.include_router(router, tags=["Authentication"])
+    except Exception as e:
+        return jsonify({'error': 'Login failed'}), 500
