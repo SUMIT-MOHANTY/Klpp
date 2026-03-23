@@ -1,35 +1,37 @@
-# IMMUTABLE LEDGER - do not alter after creation
-from datetime import datetime
-from decimal import Decimal
-from sqlalchemy import Column, Integer, String, Decimal as SqlDecimal, DateTime, func
-from app.db import Base
+from sqlalchemy import Column, Integer, String, DateTime, Numeric, ForeignKey
+from sqlalchemy.sql import func
+from sqlalchemy.orm import relationship
+from pydantic import BaseModel
+import datetime
+
+from app.models import Base
 
 class Transaction(Base):
-    """
-    Immutable ledger transaction model.
-    Once created, transaction records cannot be updated or deleted.
-    """
-    __tablename__ = 'transactions'
+    __tablename__ = "transactions"
 
-    id = Column(Integer, primary_key=True)
-    txn_hash = Column(String(128), unique=True, nullable=False, index=True)
-    ref_table = Column(String(50), nullable=False, index=True)
-    ref_id = Column(Integer, nullable=False)
-    amount = Column(SqlDecimal(15, 2), nullable=False, default=Decimal('0.00'))
-    currency = Column(String(3), nullable=False, default='USD')
-    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
+    transaction_id = Column(String, unique=True, index=True)
+    policy_id = Column(Integer, ForeignKey("policies.id"))
+    transaction_type = Column(String)
+    amount = Column(Numeric(10, 2))
+    transaction_date = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    policy = relationship("Policy", back_populates="transactions")
 
     def __repr__(self):
-        return f"<Transaction {self.txn_hash}: {self.amount} {self.currency}>"
+        return f"<Transaction {self.transaction_id}>"
 
-    def to_dict(self):
-        """Convert transaction to dictionary for JSON serialization."""
-        return {
-            'id': self.id,
-            'txn_hash': self.txn_hash,
-            'ref_table': self.ref_table,
-            'ref_id': self.ref_id,
-            'amount': float(self.amount),  # Convert Decimal to float for JSON
-            'currency': self.currency,
-            'created_at': self.created_at.isoformat() if self.created_at else None
-        }
+class TransactionCreate(BaseModel):
+    transaction_id: str
+    policy_id: int
+    transaction_type: str
+    amount: float
+    transaction_date: datetime.datetime
+
+    class Config:
+        from_attributes = True
+
+# Add reverse relationship to Policy
+from app.models.policy import Policy
+Policy.transactions = relationship("Transaction", back_populates="policy")

@@ -1,24 +1,38 @@
-from flask import Flask
-from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
+import os
+import logging
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.models import Base
+from db.database import engine
 
-db = SQLAlchemy()
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-def create_app():
-    app = Flask(__name__)
-    CORS(app)
-    app.config.from_prefixed_env()
-    app.config.setdefault("SQLALCHEMY_DATABASE_URI", "postgresql://postgres:postgres@db:5432/fin_insurance")
-    app.config.setdefault("SQLALCHEMY_TRACK_MODIFICATIONS", False)
+# Create database tables
+Base.metadata.create_all(bind=engine)
 
-    db.init_app(app)
+# Create FastAPI app
+app = FastAPI(
+    title="Fin Insurance API",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
 
-    with app.app_context():
-        from .routes import health
-        app.register_blueprint(health.bp)
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 
-    return app
-
-# Import and register ledger blueprint
+# Import routes
 from app.routes.ledger import ledger_bp
-app.register_blueprint(ledger_bp)
+from fastapi import APIRouter
+
+# Register routes
+router = APIRouter()
+app.include_router(ledger_bp, prefix="/api", tags=["ledger"])
